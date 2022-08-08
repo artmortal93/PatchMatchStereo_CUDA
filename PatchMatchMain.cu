@@ -182,6 +182,110 @@ __device__ float DisSimilarity(uchar3 color_p, PMGradient grad_p, int row, int c
 	return (1.0f - alpha) * dc + alpha * dg;
 }
 
+__global__ void RowIteration(float** costs, DisparityPlane** planes, uint8_t** views, PMGradient** grads, curandStateXORWOW_t* rand_state, int view, int cur_row, int direction, PMOption option)
+{
+	int row_idx = cur_row;
+	int col_idx = blockDim.x * blockIdx.x + threadIdx.x;
+	int height = option.height;
+	int width = option.width;
+	if (col_idx < width) {
+		DisparityPlane& plane_p = planes[view][Get2dIdx(row_idx, col_idx, height, width)];
+		float& cost_p = costs[view][Get2dIdx(row_idx, col_idx, height, width)];
+		int offsets[3] = { -1,0,1 };
+		for (int i = 0; i < 3; i++) {
+			int coord_x = row_idx - direction;
+			int coord_y = col_idx + offsets[i];
+			if (coord_x >= 0 && coord_x < height && coord_y >= 0 && coord_y < width)
+			{
+				DisparityPlane plane = planes[view][Get2dIdx(coord_x, coord_y, height, width)];
+				//get a patch match cost of a different plane with current x and y
+				float cost = PatchMatchCost(plane, views, grads, row_idx, col_idx, view, option);
+				if (cost < cost_p) {
+					plane_p = plane;
+					cost_p = cost;
+				}
+			}
+		}
+		int max_disp;
+		int min_disp;
+		if (view == 0)
+		{
+			min_disp = option.disp_min;
+			max_disp = option.disp_max;
+		}
+		else if (view == 1) {
+			min_disp = -1 * option.disp_max;
+			max_disp = option.disp_min;
+		}
+		float d_p = plane_p.ToDisparity(col_idx, row_idx);
+		int coord = row_idx * width + col_idx;
+		float3 norm_p = plane_p.ToNormal();
+		float disp_update = (max_disp - min_disp) / 2.0f;
+		float norm_update = 1.0f;
+		float stop_thres = 0.25f; //0.1f is 10 times for disp
+		curandState localState = rand_state[coord];
+		while (disp_update > stop_thres) {
+			float np_rdval = curand_uniform(&localState);
+			float np_sign = np_rdval > 0.5 ? 1.0f : -1.0f;
+			float disp_rd = np_sign * curand_uniform(&localState) * disp_update;
+			float d_p_new = d_p + disp_rd;
+			if (d_p_new<min_disp || d_p_new>max_disp)
+			{
+				disp_update /= 2;
+				norm_update /= 2;
+				continue;
+			}
+			//float3 norm_rd;
+			float normal[3] = { 0.0f,0.0f,0.0f };
+#pragma unroll
+			for (int i = 0; i < 3; i++)
+			{
+				np_rdval = curand_uniform(&localState);
+				np_sign = np_rdval > 0.5 ? 1.0f : -1.0f;
+				float nval = np_sign * curand_uniform(&localState);  //XORWOW generator not generate 0.0,but include 1.0, so no need to check
+				normal[i] = nval;
+			}
+			//norm_rd = { normal[0],normal[1],normal[2] };
+			float3 norm_p_new = { normal[0] + norm_p.x,normal[1] + norm_p.y,normal[2] + norm_p.z };
+			norm_p_new = Normalize(norm_p_new);
+			if (!valid_init(col_idx, row_idx, norm_p_new, d_p_new)) {
+				printf("[PlaneREfinement] Not good change\n");
+				disp_update /= 2;
+				norm_update /= 2;
+				continue;
+			}
+			auto plane_new = DisparityPlane(col_idx, row_idx, norm_p_new, d_p_new);
+			if (plane_new != plane_p) {
+				const float cost = PatchMatchCost(plane_new, views, grads, row_idx, col_idx, view, option);
+				if (cost < cost_p) {
+					plane_p = plane_new;
+					cost_p = cost;
+					d_p = d_p_new;
+					norm_p = norm_p_new;
+				}
+			}
+			disp_update /= 2.0f;
+			norm_update /= 2.0f;
+		}
+		rand_state[coord] = localState;
+		//plane refinement ends
+		//view propagation starts
+		int coord_yr = lround(col_idx - d_p);
+		if (coord_yr < 0 || coord_yr >= width || !isfinite(d_p))
+			return;
+		DisparityPlane& plane_q = planes[1 - view][Get2dIdx(row_idx, coord_yr, height, width)];
+		auto& cost_q = costs[1 - view][Get2dIdx(row_idx, coord_yr, height, width)];
+		DisparityPlane plane_p2q = ToAnotherView(plane_q);
+		float cost = PatchMatchCost(plane_p2q, views, grads, row_idx, coord_yr, 1 - view, option);
+		if (cost < cost_q)
+		{
+			plane_q = plane_p2q;
+			cost_q = cost;
+		}
+		//view propagation ends
+	}
+}
+
 
 
 //REMIND THAT X MEANS ROW AND Y MEANS COL IN CODE's CONTEXT
@@ -638,17 +742,19 @@ __global__ void interpolation(float* disp, float* disp_buffer, uint8_t* disp_mas
 			}
 			else if (plane_left.Empty() && !plane_right.Empty())
 			{
-				disp_buffer[Get2dIdx(x_idx, y_idx, height, width)] = disp_right;//plane_right.ToDisparity(y_idx,x_idx);
+				disp_buffer[Get2dIdx(x_idx, y_idx, height, width)] = disp_right;
 				disp_mask[Get2dIdx(x_idx, y_idx, height, width)] = NORMAL;
 			}
 			else if (!plane_left.Empty() && plane_right.Empty())
 			{
-				disp_buffer[Get2dIdx(x_idx, y_idx, height, width)] = disp_left;//plane_left.ToDisparity(y_idx, x_idx);
+				disp_buffer[Get2dIdx(x_idx, y_idx, height, width)] = disp_left;//
 				disp_mask[Get2dIdx(x_idx, y_idx, height, width)] = NORMAL;
 			}
 			else {
-				float d_r = disp_right;//abs(plane_right.ToDisparity(y_idx, x_idx));
+				float d_r = disp_right;//
+				//float d_r = plane_right.ToDisparity(y_idx, x_idx);
 				float d_l = disp_left;//abs(plane_left.ToDisparity(y_idx, x_idx));
+				//float d_l= plane_left.ToDisparity(y_idx, x_idx);
 				disp_buffer[Get2dIdx(x_idx, y_idx, height, width)] = abs(d_l)<abs(d_r)? d_l : d_r;
 				disp_mask[Get2dIdx(x_idx, y_idx, height, width)] = NORMAL;
 			}

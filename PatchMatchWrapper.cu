@@ -199,37 +199,61 @@ void PatchMatchWrapper::Compute(int iter)
 	printf("Ellaped time:%f ms\n", milliseconds);
 	//init all the stream
 	cudaEventRecord(start);
-	
-	for (int it = 0; it < iter; it++)
-	{
-		unsigned int worker_height = height;//(height+1) / 2;
-		unsigned int worker_width = width;////(width+1) / 2;
-		unsigned int worker_block_dim_x = worker_height / BLOCK_SIZE + 1;
-		unsigned int worker_block_dim_y = worker_width / BLOCK_SIZE + 1;
-		dim3 worker_blockconfig= { BLOCK_SIZE,BLOCK_SIZE,1 };
-		dim3 worker_gridconfig = {worker_block_dim_x,worker_block_dim_y,1};
-		printf("iter:%d \n", it);
-		
-		for (int view = 0; view < 2; view++) {
-				SpatialPropagation_Red<<< worker_gridconfig, worker_blockconfig, 0, streams[0]>>> (costs, planes, views, grads,view,m_option);
+	if (m_option.mode == PM_MODE::RB) {
+		for (int it = 0; it < iter; it++)
+		{
+			unsigned int worker_height = height;//(height+1) / 2;
+			unsigned int worker_width = width;////(width+1) / 2;
+			unsigned int worker_block_dim_x = worker_height / BLOCK_SIZE + 1;
+			unsigned int worker_block_dim_y = worker_width / BLOCK_SIZE + 1;
+			dim3 worker_blockconfig = { BLOCK_SIZE,BLOCK_SIZE,1 };
+			dim3 worker_gridconfig = { worker_block_dim_x,worker_block_dim_y,1 };
+			printf("iter:%d \n", it);
+
+			for (int view = 0; view < 2; view++) {
+				SpatialPropagation_Red << < worker_gridconfig, worker_blockconfig, 0, streams[0] >> > (costs, planes, views, grads, view, m_option);
 				cudaStreamSynchronize(streams[0]);
 				gpuErrchk(cudaPeekAtLastError());
-				PlaneRefinement_Red<<< worker_gridconfig, worker_blockconfig, 0, streams[0]>>> (rand_states ,costs, planes, views, grads, view, m_option);
+				PlaneRefinement_Red << < worker_gridconfig, worker_blockconfig, 0, streams[0] >> > (rand_states, costs, planes, views, grads, view, m_option);
 				cudaStreamSynchronize(streams[0]);
 				gpuErrchk(cudaPeekAtLastError());
-				ViewPropagation_Red<<< worker_gridconfig, worker_blockconfig, 0, streams[0]>>> (costs, planes, views, grads, view, m_option);
+				ViewPropagation_Red << < worker_gridconfig, worker_blockconfig, 0, streams[0] >> > (costs, planes, views, grads, view, m_option);
 				cudaStreamSynchronize(streams[0]);
-				SpatialPropagation_Black<<< worker_gridconfig, worker_blockconfig, 0, streams[0]>>> (costs, planes, views, grads, view, m_option);
+				SpatialPropagation_Black << < worker_gridconfig, worker_blockconfig, 0, streams[0] >> > (costs, planes, views, grads, view, m_option);
 				cudaStreamSynchronize(streams[0]);
 				gpuErrchk(cudaPeekAtLastError());
-				PlaneRefinement_Black<<< worker_gridconfig, worker_blockconfig, 0, streams[0]>>> (rand_states, costs, planes, views, grads, view, m_option);
+				PlaneRefinement_Black << < worker_gridconfig, worker_blockconfig, 0, streams[0] >> > (rand_states, costs, planes, views, grads, view, m_option);
 				cudaStreamSynchronize(streams[0]);
-				ViewPropagation_Black<<< worker_gridconfig, worker_blockconfig, 0, streams[0]>>> (costs, planes, views, grads, view, m_option);
+				ViewPropagation_Black << < worker_gridconfig, worker_blockconfig, 0, streams[0] >> > (costs, planes, views, grads, view, m_option);
 				cudaStreamSynchronize(streams[0]);
-			  	
+
+			}
+
+			cudaStreamSynchronize(streams[0]);
 		}
-		
-		cudaStreamSynchronize(streams[0]);
+	}
+	else {
+		for (int it = 0; it < iter; it++)
+		{
+			unsigned int worker_height = height;
+			unsigned int worker_width = width;
+			unsigned int worker_block_dim_x = worker_width / BLOCK_SIZE + 1;
+			dim3 worker_blockconfig = { BLOCK_SIZE,1,1 };
+			dim3 worker_gridconfig = { worker_block_dim_x,1,1 };
+			printf("iter:%d \n", it);
+			for (int view = 0; view < 2; view++) {
+				int direction = it % 2 == 0 ? 1 : -1;
+				int start_row = (direction == 1) ? 1 : height - 2;
+				int end_row = (direction == 1) ? height : -1;
+				for (int r = start_row; r != end_row; r += direction)
+				{
+					RowIteration << <worker_gridconfig,worker_blockconfig, 0, streams[0] >> > (costs, planes, views, grads, rand_states, view, r, direction, m_option);
+				}	
+				cudaDeviceSynchronize();
+			}
+
+
+		}
 	}
 	cudaEventRecord(stop);
 	cudaEventSynchronize(stop);

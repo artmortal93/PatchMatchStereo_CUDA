@@ -56,3 +56,6 @@ __global__ void weight_median_filter(float* disp_left, float* disp_out, uint8_t*
 
 //get gradient for
 __device__ float DisSimilarity(uchar3 color_p, PMGradient grad_p, int row, int col, float d, int view, uint8_t* views, PMGradient* grads, PMOption option);
+
+
+__global__ void RowIteration(float** costs, DisparityPlane** planes, uint8_t** views, PMGradient** grads, curandStateXORWOW_t* rand_state,int view,int cur_row, int direction, PMOption option);

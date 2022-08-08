@@ -44,6 +44,11 @@ enum PM_COLOR {
     INVALID
 };
 
+enum PM_MODE {
+    RB,
+    ROW_SWEEP
+};
+
 struct PMOption
 {
     int height=0;
@@ -56,6 +61,7 @@ struct PMOption
     int disp_max = 128;
     int win_size = 16;
     int patch_size = 35;
+    int mode = PM_MODE::RB;
 };
 
 struct PMGradient {

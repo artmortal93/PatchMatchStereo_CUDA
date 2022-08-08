@@ -110,8 +110,8 @@ int main()
 
 
 
-    //auto name_tuple = retrieve_middlebury_old(16);
-    auto name_tuple = retrieve_whu("012_98", "012008.png");
+    auto name_tuple = retrieve_middlebury_old(0);
+    //auto name_tuple = retrieve_whu("012_98", "012008.png");
     std::string left_img_path_str = std::get<0>(name_tuple);
     
     std::string right_img_path_str = std::get<1>(name_tuple);
@@ -128,13 +128,14 @@ int main()
     PMOption option;
     option.width = l_width;
     option.height = l_height;
+    option.mode = PM_MODE::ROW_SWEEP;
     PatchMatchWrapper* compute_wrapper=new PatchMatchWrapper(option);
   
     compute_wrapper->Init();
     compute_wrapper->SetSourceImgs(image_left, image_right);
     compute_wrapper->Compute(8);   
     float* image_disp_left = compute_wrapper->RetrieveLeft();
-    auto save_name = img_name + "pm_disp_left.png";
+    auto save_name = img_name +std::to_string(option.mode)+ "pm_disp_left.png";
     write_disparity(save_name, image_disp_left, option.height, option.width, option.disp_min, option.disp_max);
 
     delete compute_wrapper;
