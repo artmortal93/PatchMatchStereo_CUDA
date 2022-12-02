@@ -40,6 +40,8 @@ https://www.bilibili.com/video/BV1uh411b7Sj/
 
 The Repo aim to update this algorithm soon.
 
+UPDATE:THIS ALGO IS COMPLETE!You can choose in PMoption  between PM_MODE::RB/PM_MODE::ROW_SWEEP to test different mode of algorithm.
+
 ## Paper Link for study
 
 Original Patch-Match Stereo:http://www.bmva.org/bmvc/2011/proceedings/paper14/paper14.pdf
